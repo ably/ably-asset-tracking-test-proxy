@@ -1,7 +1,5 @@
-package com.ably.tracking.test.android.common
+package com.ably.tracking.test
 
-import io.ably.lib.types.ClientOptions
-import io.ably.lib.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
@@ -28,6 +26,7 @@ import io.ktor.websocket.close
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import java.net.ServerSocket
 import java.net.Socket
@@ -36,14 +35,11 @@ import javax.net.ssl.SSLSocketFactory
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.server.cio.CIO as ServerCIO
 
-private const val AGENT_HEADER_NAME = "ably-asset-tracking-android-publisher-tests"
-
+// TODO If we want to be able to support multiple fault simulations at the same time, then we need to not use static values here. I don’t think it’s a pressing need, though, since we currently don’t run the SDK tests in parallel
 private const val PROXY_HOST = "localhost"
 private const val PROXY_PORT = 13579
 private const val REALTIME_HOST = "realtime.ably.io"
 private const val REALTIME_PORT = 443
-
-const val PUBLISHER_CLIENT_ID = "AatNetworkConnectivityTests_Publisher"
 
 /**
  * A local proxy that can be used to intercept Realtime traffic for testing
@@ -60,47 +56,14 @@ interface RealtimeProxy {
     fun stop()
 
     /**
-     * Ably ClientOptions that have been configured to direct traffic
-     * through this proxy service
-     */
-    fun clientOptions(): ClientOptions
-}
-
-/**
- * Common base class for proxies to provide ClientOptions generation
- */
-abstract class AatProxy(
-    private val apiKey: String
-) : RealtimeProxy {
-
-    /**
      * The host address the proxy will listen on
      */
-    abstract val listenHost: String
+    val listenHost: String
 
     /**
      * The port the proxy will be listening on
      */
-    abstract val listenPort: Int
-
-    /**
-     * Pre-configured client options to configure AblyRealtime to send traffic locally through
-     * this proxy. Note that TLS is disabled, so that the proxy can act as a man in the middle.
-     */
-    override fun clientOptions() = ClientOptions().apply {
-        this.clientId = PUBLISHER_CLIENT_ID
-        this.agents = mapOf(AGENT_HEADER_NAME to BuildConfig.VERSION_NAME)
-        this.idempotentRestPublishing = true
-        this.autoConnect = false
-        this.key = apiKey
-        this.logHandler = Log.LogHandler { _, _, msg, tr ->
-            testLogD("${msg!!} - $tr", tr)
-        }
-        this.logLevel = Log.VERBOSE
-        this.realtimeHost = listenHost
-        this.port = listenPort
-        this.tls = false
-    }
+    val listenPort: Int
 }
 
 /**
@@ -110,14 +73,13 @@ abstract class AatProxy(
  * as connections being interrupted or packets being dropped entirely.
  */
 class Layer4Proxy(
-    apiKey: String,
     override val listenHost: String = PROXY_HOST,
     override val listenPort: Int = PROXY_PORT,
     private val targetAddress: String = REALTIME_HOST,
     private val targetPort: Int = REALTIME_PORT,
-) : AatProxy(apiKey) {
+) : RealtimeProxy {
 
-    private val loggingTag = "Layer4Proxy"
+    private val logger = LoggerFactory.getLogger("Layer4Proxy")
 
     private var server: ServerSocket? = null
     private val sslSocketFactory = SSLSocketFactory.getDefault()
@@ -134,7 +96,7 @@ class Layer4Proxy(
      */
     private fun accept(): Layer4ProxyConnection {
         val clientSock = server?.accept()
-        testLogD("$loggingTag: accepted connection")
+        logger.debug("accepted connection")
 
         val serverSock = sslSocketFactory.createSocket(targetAddress, targetPort)
         val conn = Layer4ProxyConnection(serverSock, clientSock!!, targetAddress, parentProxy = this)
@@ -160,20 +122,20 @@ class Layer4Proxy(
      */
     override fun start() {
         if (server != null) {
-            testLogD("$loggingTag: start() called while already running")
+            logger.debug("start() called while already running")
             return
         }
 
         server = ServerSocket(listenPort)
         Thread {
             while (true) {
-                testLogD("$loggingTag: proxy trying to accept")
+                logger.debug("proxy trying to accept")
                 try {
                     val conn = this.accept()
-                    testLogD("$loggingTag: proxy starting to run")
+                    logger.debug("proxy starting to run")
                     conn.run()
                 } catch (e: Exception) {
-                    testLogD("$loggingTag: proxy shutting down: " + e.message)
+                    logger.debug("proxy shutting down: " + e.message)
                     break
                 }
             }
@@ -191,7 +153,7 @@ internal class Layer4ProxyConnection(
     private val parentProxy: Layer4Proxy
 ) {
 
-    private val loggingTag = "Layer4ProxyConnection"
+    private val logger = LoggerFactory.getLogger("Layer4ProxyConnection")
 
     /**
      * Starts two threads, one forwarding traffic in each direction between
@@ -209,13 +171,13 @@ internal class Layer4ProxyConnection(
         try {
             server.close()
         } catch (e: Exception) {
-            testLogD("$loggingTag: stop() server: $e", e)
+            logger.debug("stop() server: $e", e)
         }
 
         try {
             client.close()
         } catch (e: Exception) {
-            testLogD("$loggingTag: stop() client: $e", e)
+            logger.debug("stop() client: $e", e)
         }
     }
 
@@ -238,7 +200,7 @@ internal class Layer4ProxyConnection(
 
             // HTTP is plaintext so we can just read it
             val msg = String(buff, 0, bytesRead)
-            testLogD("$loggingTag: ${String(buff.copyOfRange(0, bytesRead))}")
+            logger.debug(String(buff.copyOfRange(0, bytesRead)))
             if (rewriteHost) {
                 val newMsg = msg.replace(
                     oldValue = "${parentProxy.listenHost}:${parentProxy.listenPort}",
@@ -257,7 +219,7 @@ internal class Layer4ProxyConnection(
             }
         } catch (ignored: SocketException) {
         } catch (e: Exception) {
-            testLogD("$loggingTag: $e", e)
+            logger.debug("$e", e)
         } finally {
             try {
                 srcSock.close()
@@ -272,22 +234,21 @@ internal class Layer4ProxyConnection(
  * the Ably protocol level.
  */
 class Layer7Proxy(
-    apiKey: String,
     override val listenHost: String = PROXY_HOST,
     override val listenPort: Int = PROXY_PORT,
     private val targetHost: String = REALTIME_HOST,
     private val targetPort: Int = REALTIME_PORT
-) : AatProxy(apiKey) {
+) : RealtimeProxy {
 
     companion object {
-        const val tag = "Layer7Proxy"
+        val logger = LoggerFactory.getLogger("Layer7Proxy")
     }
 
     private var server: ApplicationEngine? = null
     var interceptor: Layer7Interceptor = PassThroughInterceptor()
 
     override fun start() {
-        testLogD("$tag: starting...")
+        logger.debug("starting...")
         server = embeddedServer(
             ServerCIO,
             port = listenPort,
@@ -308,7 +269,7 @@ class Layer7Proxy(
     }
 
     override fun stop() {
-        testLogD("$tag: stopping...")
+        logger.debug("stopping...")
         server?.stop()
     }
 
@@ -323,10 +284,10 @@ class Layer7Proxy(
         serverSession: WebSocketServerSession,
     ) {
         for (received in incoming) {
-            testLogD("$tag: (raw) [$direction] ${logFrame(received)}")
+            logger.debug("(raw) [$direction] ${logFrame(received)}")
             try {
                 for (action in interceptor.interceptFrame(direction, received)) {
-                    testLogD("$tag: (forwarding) [${action.direction}]: ${logFrame(action.frame)}")
+                    logger.debug("(forwarding) [${action.direction}]: ${logFrame(action.frame)}")
                     when (action.direction) {
                         FrameDirection.ClientToServer -> {
                             clientSession.send(action.frame)
@@ -343,7 +304,7 @@ class Layer7Proxy(
                     }
                 }
             } catch (e: Exception) {
-                testLogD("$tag: forwardFrames error: $e", e)
+                logger.debug("forwardFrames error: $e", e)
                 throw(e)
             }
         }
@@ -356,7 +317,7 @@ class Layer7Proxy(
  */
 fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
     webSocketRaw(path) {
-        testLogD("${Layer7Proxy.tag}: Client connected to $path")
+        Layer7Proxy.logger.debug("Client connected to $path")
 
         val serverSession = this
         val client = configureWsClient()
@@ -383,7 +344,7 @@ fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
             val clientSession = this
 
             val serverJob = launch {
-                testLogD("${Layer7Proxy.tag}: ==> (started)")
+                Layer7Proxy.logger.debug("==> (started)")
                 parent.forwardFrames(
                     FrameDirection.ClientToServer,
                     serverSession.incoming,
@@ -393,7 +354,7 @@ fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
             }
 
             val clientJob = launch {
-                testLogD("${Layer7Proxy.tag}: <== (started)")
+                Layer7Proxy.logger.debug("<== (started)")
                 parent.forwardFrames(
                     FrameDirection.ServerToClient,
                     clientSession.incoming,
@@ -418,7 +379,7 @@ fun configureWsClient() =
         install(Logging) {
             logger = object : Logger {
                 override fun log(message: String) {
-                    testLogD("${Layer7Proxy.tag}: ktor client: $message")
+                    Layer7Proxy.logger.debug("ktor client: $message")
                 }
             }
             level = LogLevel.ALL

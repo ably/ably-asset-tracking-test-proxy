@@ -1,7 +1,22 @@
-package com.ably.tracking.test.android.common
+package com.ably.tracking.test.faults
 
+import com.ably.tracking.test.Action
+import com.ably.tracking.test.ConnectionParams
+import com.ably.tracking.test.FrameDirection
+import com.ably.tracking.test.Layer4Proxy
+import com.ably.tracking.test.Layer7Interceptor
+import com.ably.tracking.test.Layer7Proxy
+import com.ably.tracking.test.Message
+import com.ably.tracking.test.PassThroughInterceptor
+import com.ably.tracking.test.RealtimeProxy
+import com.ably.tracking.test.isAction
+import com.ably.tracking.test.isPresenceAction
+import com.ably.tracking.test.logFrame
+import com.ably.tracking.test.pack
+import com.ably.tracking.test.unpack
 import io.ktor.websocket.Frame
 import io.ktor.websocket.FrameType
+import org.slf4j.LoggerFactory
 import java.util.Timer
 import kotlin.concurrent.timerTask
 
@@ -13,9 +28,9 @@ import kotlin.concurrent.timerTask
 abstract class Fault {
 
     /**
-     * Create a fresh simulation of this fault type, using provided Ably credentials
+     * Create a fresh simulation of this fault type
      */
-    abstract fun simulate(apiKey: String): FaultSimulation
+    abstract fun simulate(): FaultSimulation
 
     /**
      * A human-readable name for this type of fault
@@ -41,15 +56,6 @@ abstract class FaultSimulation {
      * and channel activity during and after the fault.
      */
     abstract val type: FaultType
-
-    /**
-     * Subclasses can override this value to `true` in order to skip test that use this fault.
-     * We're using this in order to allow us to write tests which are known to fail, then allow them to pass in the CI
-     * environment temporarily until we subsequently raise a pull request to fix them.
-     * The advantage of this approach is that the test code remains active and continually compiled as
-     * a first class citizen of the codebase, while we work on other things to get it passing.
-     */
-    open val skipTest: Boolean = false
 
     /**
      * A RealtimeProxy instance that will be manipulated by this fault
@@ -116,8 +122,8 @@ sealed class FaultType {
 /**
  * Base class for faults requiring a Layer 4 proxy for simulation.
  */
-abstract class TransportLayerFault(apiKey: String) : FaultSimulation() {
-    val tcpProxy = Layer4Proxy(apiKey = apiKey)
+abstract class TransportLayerFault() : FaultSimulation() {
+    val tcpProxy = Layer4Proxy()
     override val proxy = tcpProxy
 }
 
@@ -125,11 +131,11 @@ abstract class TransportLayerFault(apiKey: String) : FaultSimulation() {
  * A Transport-layer fault implementation that breaks nothing, useful for ensuring the
  * test code works under normal proxy functionality.
  */
-class NullTransportFault(apiKey: String) : TransportLayerFault(apiKey) {
+class NullTransportFault : TransportLayerFault() {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = NullTransportFault(apiKey)
+            override fun simulate() = NullTransportFault()
             override val name = "NullTransportFault"
         }
     }
@@ -148,11 +154,11 @@ class NullTransportFault(apiKey: String) : TransportLayerFault(apiKey) {
 /**
  * A fault implementation that will prevent the proxy from accepting TCP connections when active
  */
-class TcpConnectionRefused(apiKey: String) : TransportLayerFault(apiKey) {
+class TcpConnectionRefused() : TransportLayerFault() {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = TcpConnectionRefused(apiKey)
+            override fun simulate() = TcpConnectionRefused()
             override val name = "TcpConnectionRefused"
         }
     }
@@ -175,11 +181,11 @@ class TcpConnectionRefused(apiKey: String) : TransportLayerFault(apiKey) {
  * A fault implementation that hangs the TCP connection by preventing the Layer 4
  * proxy from forwarding packets in both directions
  */
-class TcpConnectionUnresponsive(apiKey: String) : TransportLayerFault(apiKey) {
+class TcpConnectionUnresponsive : TransportLayerFault() {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = TcpConnectionUnresponsive(apiKey)
+            override fun simulate() = TcpConnectionUnresponsive()
             override val name = "TcpConnectionUnresponsive"
         }
     }
@@ -202,12 +208,12 @@ class TcpConnectionUnresponsive(apiKey: String) : TransportLayerFault(apiKey) {
  * Fault implementation that causes the proxy to reject incoming connections entirely
  * for two minutes, then comes back online. This should force client side
  */
-class DisconnectAndSuspend(apiKey: String) : TransportLayerFault(apiKey) {
+class DisconnectAndSuspend : TransportLayerFault() {
 
     companion object {
         const val SUSPEND_DELAY_MILLIS: Long = 2 * 60 * 1000
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = DisconnectAndSuspend(apiKey)
+            override fun simulate() = DisconnectAndSuspend()
             override val name = "DisconnectAndSuspend"
         }
     }
@@ -243,8 +249,8 @@ class DisconnectAndSuspend(apiKey: String) : TransportLayerFault(apiKey) {
  * Base class for Application layer faults, which will need access to the Ably
  * WebSockets protocol, and therefore a Layer 7 proxy.
  */
-abstract class ApplicationLayerFault(apiKey: String) : FaultSimulation() {
-    val applicationProxy = Layer7Proxy(apiKey)
+abstract class ApplicationLayerFault : FaultSimulation() {
+    val applicationProxy = Layer7Proxy()
     override val proxy = applicationProxy
 }
 
@@ -252,11 +258,11 @@ abstract class ApplicationLayerFault(apiKey: String) : FaultSimulation() {
  * An empty fault implementation for the Layer 7 proxy to ensure that normal
  * functionality is working with no interventions
  */
-class NullApplicationLayerFault(apiKey: String) : ApplicationLayerFault(apiKey) {
+class NullApplicationLayerFault : ApplicationLayerFault() {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = NullApplicationLayerFault(apiKey)
+            override fun simulate() = NullApplicationLayerFault()
             override val name = "NullApplicationLayerFault"
         }
     }
@@ -277,16 +283,15 @@ class NullApplicationLayerFault(apiKey: String) : ApplicationLayerFault(apiKey) 
  * type in a specified direction
  */
 abstract class DropAction(
-    apiKey: String,
     private val direction: FrameDirection,
     private val action: Message.Action,
     private val dropLimit: Int,
-) : ApplicationLayerFault(apiKey) {
+) : ApplicationLayerFault() {
 
     private var nDropped = 0
 
     companion object {
-        private const val tag = "DropAction"
+        private val logger = LoggerFactory.getLogger("DropAction")
     }
 
     private var initialConnection = true
@@ -302,7 +307,7 @@ abstract class DropAction(
                 if (initialConnection) {
                     initialConnection = false
                 } else {
-                    testLogD("$tag: second connection -- resolving fault")
+                    logger.debug("second connection -- resolving fault")
                     resolve()
                 }
 
@@ -311,11 +316,11 @@ abstract class DropAction(
 
             override fun interceptFrame(direction: FrameDirection, frame: Frame) =
                 if (shouldFilter(direction, frame)) {
-                    testLogD("$tag: dropping: $direction - ${logFrame(frame)}")
+                    logger.debug("dropping: $direction - ${logFrame(frame)}")
                     nDropped += 1
                     listOf()
                 } else {
-                    testLogD("$tag: keeping: $direction - ${logFrame(frame)}")
+                    logger.debug("keeping: $direction - ${logFrame(frame)}")
                     listOf(Action(direction, frame))
                 }
         }
@@ -340,15 +345,14 @@ abstract class DropAction(
  * A DropAction fault implementation to drop ATTACH messages,
  * simulating the Ably server failing to respond to channel attachment
  */
-class AttachUnresponsive(apiKey: String) : DropAction(
-    apiKey = apiKey,
+class AttachUnresponsive : DropAction(
     direction = FrameDirection.ClientToServer,
     action = Message.Action.ATTACH,
     dropLimit = 1,
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = AttachUnresponsive(apiKey)
+            override fun simulate() = AttachUnresponsive()
             override val name = "AttachUnresponsive"
         }
     }
@@ -358,15 +362,14 @@ class AttachUnresponsive(apiKey: String) : DropAction(
  * A DropAction fault implementation to drop DETACH messages,
  * simulating the Ably server failing to detach a client from a channel.
  */
-class DetachUnresponsive(apiKey: String) : DropAction(
-    apiKey = apiKey,
+class DetachUnresponsive : DropAction(
     direction = FrameDirection.ClientToServer,
     action = Message.Action.DETACH,
     dropLimit = 1,
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = DetachUnresponsive(apiKey)
+            override fun simulate() = DetachUnresponsive()
             override val name = "DetachUnresponsive"
         }
     }
@@ -378,13 +381,12 @@ class DetachUnresponsive(apiKey: String) : DropAction(
  * action has been seen in the given direction.
  */
 abstract class UnresponsiveAfterAction(
-    apiKey: String,
     private val direction: FrameDirection,
     private val action: Message.Action
-) : ApplicationLayerFault(apiKey) {
+) : ApplicationLayerFault() {
 
     companion object {
-        private const val tag = "UnresponsiveAfterAction"
+        private val logger = LoggerFactory.getLogger("UnresponsiveAfterAction")
         private const val restoreFunctionalityAfterConnections = 2
     }
 
@@ -401,7 +403,7 @@ abstract class UnresponsiveAfterAction(
             override fun interceptConnection(params: ConnectionParams): ConnectionParams {
                 nConnections += 1
                 if (nConnections >= restoreFunctionalityAfterConnections) {
-                    testLogD("$tag: resolved after $restoreFunctionalityAfterConnections connections")
+                    logger.debug("resolved after $restoreFunctionalityAfterConnections connections")
                     resolve()
                 }
 
@@ -410,12 +412,12 @@ abstract class UnresponsiveAfterAction(
 
             override fun interceptFrame(direction: FrameDirection, frame: Frame): List<Action> {
                 if (shouldActivate(direction, frame)) {
-                    testLogD("$tag/$action: - connection going unresponsive")
+                    logger.debug("$action: - connection going unresponsive")
                     isTriggered = true
                 }
 
                 return if (isTriggered) {
-                    testLogD("$tag/$action: unresponsive: dropping ${logFrame(frame)}")
+                    logger.debug("$action: unresponsive: dropping ${logFrame(frame)}")
                     listOf()
                 } else {
                     listOf(Action(direction, frame))
@@ -440,14 +442,13 @@ abstract class UnresponsiveAfterAction(
  * A fault implementation makling the connection unresponsive
  * after observing an out-going Presence message
  */
-class EnterUnresponsive(apiKey: String) : UnresponsiveAfterAction(
-    apiKey = apiKey,
+class EnterUnresponsive : UnresponsiveAfterAction(
     direction = FrameDirection.ClientToServer,
     action = Message.Action.PRESENCE
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = EnterUnresponsive(apiKey)
+            override fun simulate() = EnterUnresponsive()
             override val name = "EnterUnresponsive"
         }
     }
@@ -461,11 +462,11 @@ class EnterUnresponsive(apiKey: String) : UnresponsiveAfterAction(
  * connectionId, causing the resume attempt to fail. This should not be a fatal error, the
  * Publisher should continue regardless.
  */
-class DisconnectWithFailedResume(apiKey: String) : ApplicationLayerFault(apiKey) {
+class DisconnectWithFailedResume : ApplicationLayerFault() {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = DisconnectWithFailedResume(apiKey)
+            override fun simulate() = DisconnectWithFailedResume()
             override val name = "DisconnectWithFailedResume"
         }
     }
@@ -485,6 +486,8 @@ class DisconnectWithFailedResume(apiKey: String) : ApplicationLayerFault(apiKey)
         resolvedWithinMillis = 30_000
     )
 
+    private val logger = LoggerFactory.getLogger(fault.name)
+
     override fun enable() {
         applicationProxy.interceptor = object : Layer7Interceptor {
 
@@ -492,13 +495,13 @@ class DisconnectWithFailedResume(apiKey: String) : ApplicationLayerFault(apiKey)
                 return when (state) {
                     State.AwaitingInitialConnection -> {
                         state = State.AwaitingDisconnect
-                        testLogD("${fault.name}: transitioning to $state, connection params: $params")
+                        logger.debug("transitioning to $state, connection params: $params")
                         params
                     }
                     State.AwaitingDisconnect -> {
                         state = State.Reconnected
                         params.copy(resume = modifyResumeParam(params.resume)).also {
-                            testLogD("${fault.name}: transitioning to $state, connection params: $it")
+                            logger.debug("transitioning to $state, connection params: $it")
                         }
                     }
                     State.Reconnected -> params
@@ -551,13 +554,13 @@ class DisconnectWithFailedResume(apiKey: String) : ApplicationLayerFault(apiKey)
  * them from reaching Ably, and injecting NACK responses as replies to the client.
  */
 abstract class PresenceNackFault(
-    apiKey: String,
     private val nackedPresenceAction: Message.PresenceAction,
     private val response: (msgSerial: Int) -> Map<String?, Any?>,
     private val nackLimit: Int = 3
-) : ApplicationLayerFault(apiKey) {
+) : ApplicationLayerFault() {
 
     private var nacksSent = 0
+    private val logger = LoggerFactory.getLogger("PresenceNackFault")
 
     override fun enable() {
         applicationProxy.interceptor = object : Layer7Interceptor {
@@ -567,11 +570,11 @@ abstract class PresenceNackFault(
             override fun interceptFrame(direction: FrameDirection, frame: Frame): List<Action> {
                 return if (shouldNack(direction, frame)) {
                     val msg = frame.data.unpack()
-                    testLogD("PresenceNackFault: will nack ($nacksSent): $msg")
+                    logger.debug("will nack ($nacksSent): $msg")
 
                     val msgSerial = msg["msgSerial"] as Int
                     val nackFrame = Frame.Binary(true, response(msgSerial).pack())
-                    testLogD("PresenceNackFault: sending nack: ${nackFrame.data.unpack()}")
+                    logger.debug("sending nack: ${nackFrame.data.unpack()}")
                     nacksSent += 1
 
                     listOf(
@@ -607,15 +610,14 @@ abstract class PresenceNackFault(
  * Simulates retryable presence.enter() failure. Will stop
  * nacking after 3 failures
  */
-class EnterFailedWithNonfatalNack(apiKey: String) : PresenceNackFault(
-    apiKey = apiKey,
+class EnterFailedWithNonfatalNack : PresenceNackFault(
     nackedPresenceAction = Message.PresenceAction.ENTER,
     response = ::nonFatalNack,
     nackLimit = 3
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = EnterFailedWithNonfatalNack(apiKey)
+            override fun simulate() = EnterFailedWithNonfatalNack()
             override val name = "EnterFailedWithNonfatalNack"
         }
     }
@@ -629,15 +631,14 @@ class EnterFailedWithNonfatalNack(apiKey: String) : PresenceNackFault(
  * Simulates a retryable presence.update() failure. Will stop
  * nacking after 3 failures
  */
-class UpdateFailedWithNonfatalNack(apiKey: String) : PresenceNackFault(
-    apiKey = apiKey,
+class UpdateFailedWithNonfatalNack : PresenceNackFault(
     nackedPresenceAction = Message.PresenceAction.UPDATE,
     response = ::nonFatalNack,
     nackLimit = 3
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = UpdateFailedWithNonfatalNack(apiKey)
+            override fun simulate() = UpdateFailedWithNonfatalNack()
             override val name = "UpdateFailedWithNonfatalNack"
         }
     }
@@ -653,11 +654,11 @@ class UpdateFailedWithNonfatalNack(apiKey: String) : PresenceNackFault(
  * failing. Client should handle this by re-entering presence when
  * it sees that re-enter has failed.
  */
-class ReenterOnResumeFailed(apiKey: String) : ApplicationLayerFault(apiKey) {
+class ReenterOnResumeFailed : ApplicationLayerFault() {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate(apiKey: String) = ReenterOnResumeFailed(apiKey)
+            override fun simulate() = ReenterOnResumeFailed()
             override val name = "ReenterOnResumeFailed"
         }
     }
@@ -686,11 +687,13 @@ class ReenterOnResumeFailed(apiKey: String) : ApplicationLayerFault(apiKey) {
         resolvedWithinMillis = 60_000L
     )
 
+    private val logger = LoggerFactory.getLogger(fault.name)
+
     override fun enable() {
         applicationProxy.interceptor = object : Layer7Interceptor {
 
             override fun interceptConnection(params: ConnectionParams): ConnectionParams {
-                testLogD("${fault.name}: [$state] new connection: $params")
+                logger.debug("[$state] new connection: $params")
                 if (state == State.DisconnectAfterPresence) {
                     state = State.InterceptingServerSync
                 }
@@ -728,7 +731,7 @@ class ReenterOnResumeFailed(apiKey: String) : ApplicationLayerFault(apiKey) {
             frame.frameType == FrameType.BINARY &&
             frame.data.unpack().isAction(Message.Action.PRESENCE)
         ) {
-            testLogD("${fault.name}: [$state] forcing disconnect")
+            logger.debug("[$state] forcing disconnect")
             // Note: state will advance in interceptConnection
             listOf(
                 Action(direction, frame),
@@ -753,7 +756,7 @@ class ReenterOnResumeFailed(apiKey: String) : ApplicationLayerFault(apiKey) {
             frame.frameType == FrameType.BINARY &&
             frame.data.unpack().isAction(Message.Action.SYNC)
         ) {
-            testLogD("${fault.name}: [$state] intercepting sync")
+            logger.debug("[$state] intercepting sync")
             state = State.InterceptingClientEnter
             listOf(
                 Action(direction, removePresenceFromSync(frame))
@@ -780,7 +783,7 @@ class ReenterOnResumeFailed(apiKey: String) : ApplicationLayerFault(apiKey) {
                 msg.isPresenceAction(Message.PresenceAction.ENTER)
             ) {
                 presenceEnterSerial = msg["msgSerial"] as Int
-                testLogD("${fault.name}: [$state] presence enter serial: $presenceEnterSerial")
+                logger.debug("[$state] presence enter serial: $presenceEnterSerial")
                 state = State.InterceptingServerAck
             }
         }
@@ -810,7 +813,7 @@ class ReenterOnResumeFailed(apiKey: String) : ApplicationLayerFault(apiKey) {
                 errorStatusCode = 500,
                 errorMessage = "injected by proxy"
             )
-            testLogD("${fault.name}: [$state] sending nack: $nack")
+            logger.debug("[$state] sending nack: $nack")
             state = State.WorkingNormally
             listOf(Action(direction, Frame.Binary(true, nack.pack())))
         } else {
