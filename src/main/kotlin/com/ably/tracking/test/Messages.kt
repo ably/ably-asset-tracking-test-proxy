@@ -1,8 +1,9 @@
-package com.ably.tracking.test.android.common
+package com.ably.tracking.test
 
 import org.msgpack.core.MessagePack
 import org.msgpack.core.MessagePacker
 import org.msgpack.value.Value
+import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
 
 /**
@@ -150,7 +151,8 @@ fun ByteArray.unpack(): Map<String?, Any?> {
             }
         }
     } catch (e: Exception) {
-        testLogD("MsgPack Error: $e", e)
+        val logger = LoggerFactory.getLogger("MsgPack")
+        logger.error("MsgPack Error: $e", e)
         throw(e)
     }
 }
