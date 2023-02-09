@@ -202,9 +202,10 @@ internal class Layer4ProxyConnection(
             val msg = String(buff, 0, bytesRead)
             logger.debug(String(buff.copyOfRange(0, bytesRead)))
             if (rewriteHost) {
+                val hostHeaderRegex = "Host: .*?\r\n".toRegex()
                 val newMsg = msg.replace(
-                    oldValue = "${parentProxy.listenHost}:${parentProxy.listenPort}",
-                    newValue = targetHost
+                    hostHeaderRegex,
+                    replacement = "Host: $targetHost\r\n"
                 )
                 val newBuff = newMsg.toByteArray()
                 dst.write(newBuff, 0, newBuff.size)
