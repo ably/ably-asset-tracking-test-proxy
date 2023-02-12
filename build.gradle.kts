@@ -25,3 +25,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cio-jvm:$ktor_version")
     implementation("ch.qos.logback:logback-classic:$logback_version")
 }
+
+kotlin {
+    jvmToolchain(17)
+}
