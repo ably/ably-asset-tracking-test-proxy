@@ -4,6 +4,7 @@ val logback_version: String by project
 
 plugins {
     kotlin("jvm") version "1.8.10"
+    kotlin("plugin.serialization") version "1.8.0"
     id("io.ktor.plugin") version "2.2.3"
     id("org.jlleitschuh.gradle.ktlint") version "11.1.0"
 }
@@ -30,6 +31,7 @@ dependencies {
     implementation("io.ktor:ktor-client-websockets:$ktor_version")
     implementation("io.ktor:ktor-client-logging:$ktor_version")
     implementation("io.ktor:ktor-server-content-negotiation:$ktor_version")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktor_version")
     implementation("org.msgpack:msgpack-core:0.9.3")
 }
 
