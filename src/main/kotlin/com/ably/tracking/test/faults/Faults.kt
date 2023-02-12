@@ -16,6 +16,8 @@ import com.ably.tracking.test.pack
 import com.ably.tracking.test.unpack
 import io.ktor.websocket.Frame
 import io.ktor.websocket.FrameType
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.util.Timer
 import kotlin.concurrent.timerTask
@@ -85,6 +87,7 @@ abstract class FaultSimulation {
  * Describes the nature of a given fault simulation, and specifically the impact that it
  * should have on any Trackables or channel activity during and after resolution.
  */
+@Serializable
 sealed class FaultType {
     /**
      * AAT and/or Ably Java should handle this fault seamlessly Trackable state should be
@@ -92,6 +95,8 @@ sealed class FaultType {
      * the fault will cause a brief Offline blip, but tests should expect to see Trackables
      * Online again before [resolvedWithinMillis] expires regardless.
      */
+    @Serializable
+    @SerialName("nonfatal")
     data class Nonfatal(
         val resolvedWithinMillis: Long,
     ) : FaultType()
@@ -103,6 +108,8 @@ sealed class FaultType {
      * online within [onlineWithinMillis] maximum.
      *
      */
+    @Serializable
+    @SerialName("nonfatalWhenResolved")
     data class NonfatalWhenResolved(
         val offlineWithinMillis: Long,
         val onlineWithinMillis: Long,
@@ -114,6 +121,8 @@ sealed class FaultType {
      * further location updates will be published. Tests should check that Trackables reach
      * the Failed state within [failedWithinMillis]
      */
+    @Serializable
+    @SerialName("fatal")
     data class Fatal(
         val failedWithinMillis: Long,
     ) : FaultType()
