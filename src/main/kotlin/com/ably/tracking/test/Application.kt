@@ -1,9 +1,9 @@
 package com.ably.tracking.test
 
-import io.ktor.server.application.*
-import io.ktor.server.engine.*
-import io.ktor.server.cio.*
-import com.ably.tracking.test.plugins.*
+import com.ably.tracking.test.plugins.configureRouting
+import io.ktor.server.application.Application
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
 
 fun main() {
     embeddedServer(CIO, port = 8080, host = "0.0.0.0", module = Application::module)
