@@ -8,4 +8,4 @@ How to run it:
 ./gradlew run
 ```
 
-Listens on `localhost:8080`.
+Runs a web server at `http://localhost:8080`, exposing a REST API which is documented in the OpenAPI spec contained in [`openapi-spec.yml`](openapi-spec.yaml).
