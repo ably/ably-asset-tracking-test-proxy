@@ -5,6 +5,7 @@ val logback_version: String by project
 plugins {
     kotlin("jvm") version "1.8.10"
     id("io.ktor.plugin") version "2.2.3"
+    id("org.jlleitschuh.gradle.ktlint") version "11.1.0"
 }
 
 group = "com.ably.tracking.test"
