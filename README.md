@@ -10,10 +10,26 @@ This is currently just intended as a tool for testing the Asset Tracking SDKs bu
 
 You will need to have a Java runtime installed. (The exact version does not matter; Gradle will take care of fetching and installing the correct version if needed.)
 
-How to run it:
+### Running
+
+#### Running locally
+
+To run the server in the foreground:
 
 ```bash
 ./gradlew run
 ```
 
-This runs a web server at `http://localhost:8080`, exposing a REST API which is documented in the OpenAPI spec contained in [`openapi.yaml`](openapi.yaml).
+#### Running in CI
+
+Alternatively, you can run it as a background service (useful for SDKs’ CI jobs):
+
+```bash
+./start-service
+```
+
+This script uses `sudo` so it’s probably not something you want to use locally.
+
+### Accessing
+
+The above steps will start a web server at `http://localhost:8080`, exposing a REST API which is documented in the OpenAPI spec contained in [`openapi.yaml`](openapi.yaml).
