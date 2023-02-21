@@ -151,8 +151,8 @@ components:
       discriminator:
         propertyName: 'type'
         mapping:
-          nonFatal: '#/components/schemas/NonfatalFaultTypeDto'
-          nonFatalWhenResolved: '#/components/schemas/NonFatalWhenResolvedFaultTypeDto'
+          nonfatal: '#/components/schemas/NonfatalFaultTypeDto'
+          nonfatalWhenResolved: '#/components/schemas/NonFatalWhenResolvedFaultTypeDto'
           fatal: '#/components/schemas/FatalFaultTypeDto'
 
     NonfatalFaultTypeDto:
