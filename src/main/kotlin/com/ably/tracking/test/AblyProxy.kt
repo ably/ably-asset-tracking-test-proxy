@@ -73,13 +73,14 @@ interface RealtimeProxy {
  * as connections being interrupted or packets being dropped entirely.
  */
 class Layer4Proxy(
+    private val id: String,
     override val listenHost: String = PROXY_HOST,
     override val listenPort: Int = PROXY_PORT,
     private val targetAddress: String = REALTIME_HOST,
     private val targetPort: Int = REALTIME_PORT,
 ) : RealtimeProxy {
 
-    private val logger = LoggerFactory.getLogger("Layer4Proxy")
+    private val logger = LoggerFactory.getLogger("Layer4Proxy ($id)")
 
     private var server: ServerSocket? = null
     private val sslSocketFactory = SSLSocketFactory.getDefault()
@@ -99,7 +100,7 @@ class Layer4Proxy(
         logger.debug("accepted connection")
 
         val serverSock = sslSocketFactory.createSocket(targetAddress, targetPort)
-        val conn = Layer4ProxyConnection(serverSock, clientSock!!, targetAddress, parentProxy = this)
+        val conn = Layer4ProxyConnection(id, serverSock, clientSock!!, targetAddress, parentProxy = this)
         connections.add(conn)
         return conn
     }
@@ -147,13 +148,14 @@ class Layer4Proxy(
  * A TCP Proxy connection between a local client and the remote Ably service.
  */
 internal class Layer4ProxyConnection(
+    private val id: String,
     private val server: Socket,
     private val client: Socket,
     private val targetHost: String,
     private val parentProxy: Layer4Proxy
 ) {
 
-    private val logger = LoggerFactory.getLogger("Layer4ProxyConnection")
+    private val logger = LoggerFactory.getLogger("Layer4ProxyConnection ($id)")
 
     /**
      * Starts two threads, one forwarding traffic in each direction between
@@ -235,15 +237,14 @@ internal class Layer4ProxyConnection(
  * the Ably protocol level.
  */
 class Layer7Proxy(
+    private val id: String,
     override val listenHost: String = PROXY_HOST,
     override val listenPort: Int = PROXY_PORT,
     private val targetHost: String = REALTIME_HOST,
     private val targetPort: Int = REALTIME_PORT
 ) : RealtimeProxy {
 
-    companion object {
-        val logger = LoggerFactory.getLogger("Layer7Proxy")
-    }
+    val logger = LoggerFactory.getLogger("Layer7Proxy ($id)")
 
     private var server: ApplicationEngine? = null
     var interceptor: Layer7Interceptor = PassThroughInterceptor()
@@ -318,10 +319,10 @@ class Layer7Proxy(
  */
 fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
     webSocketRaw(path) {
-        Layer7Proxy.logger.debug("Client connected to $path")
+        parent.logger.debug("Client connected to $path")
 
         val serverSession = this
-        val client = configureWsClient()
+        val client = configureWsClient(parent)
 
         val params = parent.interceptor.interceptConnection(
             ConnectionParams.fromRequestParameters(call.request.queryParameters)
@@ -345,7 +346,7 @@ fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
             val clientSession = this
 
             val serverJob = launch {
-                Layer7Proxy.logger.debug("==> (started)")
+                parent.logger.debug("==> (started)")
                 parent.forwardFrames(
                     FrameDirection.ClientToServer,
                     serverSession.incoming,
@@ -355,7 +356,7 @@ fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
             }
 
             val clientJob = launch {
-                Layer7Proxy.logger.debug("<== (started)")
+                parent.logger.debug("<== (started)")
                 parent.forwardFrames(
                     FrameDirection.ServerToClient,
                     clientSession.incoming,
@@ -373,14 +374,14 @@ fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
  * Return a Ktor HTTP Client configured for WebSockets and with logging
  * we can see in the Layer 7 proxy logs
  */
-fun configureWsClient() =
+fun configureWsClient(parent: Layer7Proxy) =
     HttpClient(ClientCIO).config {
         install(io.ktor.client.plugins.websocket.WebSockets) {
         }
         install(Logging) {
             logger = object : Logger {
                 override fun log(message: String) {
-                    Layer7Proxy.logger.debug("ktor client: $message")
+                    parent.logger.debug("ktor client: $message")
                 }
             }
             level = LogLevel.ALL

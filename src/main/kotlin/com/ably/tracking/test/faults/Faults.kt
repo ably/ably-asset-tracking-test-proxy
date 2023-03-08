@@ -29,8 +29,10 @@ abstract class Fault {
 
     /**
      * Create a fresh simulation of this fault type
+     *
+     * @param id An identifier for this fault simulation, used for logging.
      */
-    abstract fun simulate(): FaultSimulation
+    abstract fun simulate(id: String): FaultSimulation
 
     /**
      * A human-readable name for this type of fault
@@ -129,8 +131,8 @@ sealed class FaultType {
 /**
  * Base class for faults requiring a Layer 4 proxy for simulation.
  */
-abstract class TransportLayerFault() : FaultSimulation() {
-    val tcpProxy = Layer4Proxy()
+abstract class TransportLayerFault(id: String) : FaultSimulation() {
+    val tcpProxy = Layer4Proxy(id)
     override val proxy = tcpProxy
 }
 
@@ -138,11 +140,11 @@ abstract class TransportLayerFault() : FaultSimulation() {
  * A Transport-layer fault implementation that breaks nothing, useful for ensuring the
  * test code works under normal proxy functionality.
  */
-class NullTransportFault : TransportLayerFault() {
+class NullTransportFault(id: String) : TransportLayerFault(id) {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = NullTransportFault()
+            override fun simulate(id: String) = NullTransportFault(id)
             override val name = "NullTransportFault"
         }
     }
@@ -161,11 +163,11 @@ class NullTransportFault : TransportLayerFault() {
 /**
  * A fault implementation that will prevent the proxy from accepting TCP connections when active
  */
-class TcpConnectionRefused() : TransportLayerFault() {
+class TcpConnectionRefused(id: String) : TransportLayerFault(id) {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = TcpConnectionRefused()
+            override fun simulate(id: String) = TcpConnectionRefused(id)
             override val name = "TcpConnectionRefused"
         }
     }
@@ -188,11 +190,11 @@ class TcpConnectionRefused() : TransportLayerFault() {
  * A fault implementation that hangs the TCP connection by preventing the Layer 4
  * proxy from forwarding packets in both directions
  */
-class TcpConnectionUnresponsive : TransportLayerFault() {
+class TcpConnectionUnresponsive(id: String) : TransportLayerFault(id) {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = TcpConnectionUnresponsive()
+            override fun simulate(id: String) = TcpConnectionUnresponsive(id)
             override val name = "TcpConnectionUnresponsive"
         }
     }
@@ -215,12 +217,12 @@ class TcpConnectionUnresponsive : TransportLayerFault() {
  * Fault implementation that causes the proxy to reject incoming connections entirely
  * for two minutes, then comes back online. This should force client side
  */
-class DisconnectAndSuspend : TransportLayerFault() {
+class DisconnectAndSuspend(id: String) : TransportLayerFault(id) {
 
     companion object {
         const val SUSPEND_DELAY_MILLIS: Long = 2 * 60 * 1000
         val fault = object : Fault() {
-            override fun simulate() = DisconnectAndSuspend()
+            override fun simulate(id: String) = DisconnectAndSuspend(id)
             override val name = "DisconnectAndSuspend"
         }
     }
@@ -256,8 +258,8 @@ class DisconnectAndSuspend : TransportLayerFault() {
  * Base class for Application layer faults, which will need access to the Ably
  * WebSockets protocol, and therefore a Layer 7 proxy.
  */
-abstract class ApplicationLayerFault : FaultSimulation() {
-    val applicationProxy = Layer7Proxy()
+abstract class ApplicationLayerFault(id: String) : FaultSimulation() {
+    val applicationProxy = Layer7Proxy(id)
     override val proxy = applicationProxy
 }
 
@@ -265,11 +267,11 @@ abstract class ApplicationLayerFault : FaultSimulation() {
  * An empty fault implementation for the Layer 7 proxy to ensure that normal
  * functionality is working with no interventions
  */
-class NullApplicationLayerFault : ApplicationLayerFault() {
+class NullApplicationLayerFault(id: String) : ApplicationLayerFault(id) {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = NullApplicationLayerFault()
+            override fun simulate(id: String) = NullApplicationLayerFault(id)
             override val name = "NullApplicationLayerFault"
         }
     }
@@ -290,10 +292,11 @@ class NullApplicationLayerFault : ApplicationLayerFault() {
  * type in a specified direction
  */
 abstract class DropAction(
+    id: String,
     private val direction: FrameDirection,
     private val action: Message.Action,
     private val dropLimit: Int,
-) : ApplicationLayerFault() {
+) : ApplicationLayerFault(id) {
 
     private var nDropped = 0
 
@@ -352,14 +355,15 @@ abstract class DropAction(
  * A DropAction fault implementation to drop ATTACH messages,
  * simulating the Ably server failing to respond to channel attachment
  */
-class AttachUnresponsive : DropAction(
+class AttachUnresponsive(id: String) : DropAction(
+    id,
     direction = FrameDirection.ClientToServer,
     action = Message.Action.ATTACH,
     dropLimit = 1,
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = AttachUnresponsive()
+            override fun simulate(id: String) = AttachUnresponsive(id)
             override val name = "AttachUnresponsive"
         }
     }
@@ -369,14 +373,15 @@ class AttachUnresponsive : DropAction(
  * A DropAction fault implementation to drop DETACH messages,
  * simulating the Ably server failing to detach a client from a channel.
  */
-class DetachUnresponsive : DropAction(
+class DetachUnresponsive(id: String) : DropAction(
+    id,
     direction = FrameDirection.ClientToServer,
     action = Message.Action.DETACH,
     dropLimit = 1,
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = DetachUnresponsive()
+            override fun simulate(id: String) = DetachUnresponsive(id)
             override val name = "DetachUnresponsive"
         }
     }
@@ -388,9 +393,10 @@ class DetachUnresponsive : DropAction(
  * action has been seen in the given direction.
  */
 abstract class UnresponsiveAfterAction(
+    id: String,
     private val direction: FrameDirection,
     private val action: Message.Action
-) : ApplicationLayerFault() {
+) : ApplicationLayerFault(id) {
 
     companion object {
         private val logger = LoggerFactory.getLogger("UnresponsiveAfterAction")
@@ -449,13 +455,14 @@ abstract class UnresponsiveAfterAction(
  * A fault implementation makling the connection unresponsive
  * after observing an out-going Presence message
  */
-class EnterUnresponsive : UnresponsiveAfterAction(
+class EnterUnresponsive(id: String) : UnresponsiveAfterAction(
+    id,
     direction = FrameDirection.ClientToServer,
     action = Message.Action.PRESENCE
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = EnterUnresponsive()
+            override fun simulate(id: String) = EnterUnresponsive(id)
             override val name = "EnterUnresponsive"
         }
     }
@@ -469,11 +476,11 @@ class EnterUnresponsive : UnresponsiveAfterAction(
  * connectionId, causing the resume attempt to fail. This should not be a fatal error, the
  * Publisher should continue regardless.
  */
-class DisconnectWithFailedResume : ApplicationLayerFault() {
+class DisconnectWithFailedResume(id: String) : ApplicationLayerFault(id) {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = DisconnectWithFailedResume()
+            override fun simulate(id: String) = DisconnectWithFailedResume(id)
             override val name = "DisconnectWithFailedResume"
         }
     }
@@ -561,10 +568,11 @@ class DisconnectWithFailedResume : ApplicationLayerFault() {
  * them from reaching Ably, and injecting NACK responses as replies to the client.
  */
 abstract class PresenceNackFault(
+    id: String,
     private val nackedPresenceAction: Message.PresenceAction,
     private val response: (msgSerial: Int) -> Map<String?, Any?>,
     private val nackLimit: Int = 3
-) : ApplicationLayerFault() {
+) : ApplicationLayerFault(id) {
 
     private var nacksSent = 0
     private val logger = LoggerFactory.getLogger("PresenceNackFault")
@@ -617,14 +625,15 @@ abstract class PresenceNackFault(
  * Simulates retryable presence.enter() failure. Will stop
  * nacking after 3 failures
  */
-class EnterFailedWithNonfatalNack : PresenceNackFault(
+class EnterFailedWithNonfatalNack(id: String) : PresenceNackFault(
+    id,
     nackedPresenceAction = Message.PresenceAction.ENTER,
     response = ::nonFatalNack,
     nackLimit = 3
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = EnterFailedWithNonfatalNack()
+            override fun simulate(id: String) = EnterFailedWithNonfatalNack(id)
             override val name = "EnterFailedWithNonfatalNack"
         }
     }
@@ -638,14 +647,15 @@ class EnterFailedWithNonfatalNack : PresenceNackFault(
  * Simulates a retryable presence.update() failure. Will stop
  * nacking after 3 failures
  */
-class UpdateFailedWithNonfatalNack : PresenceNackFault(
+class UpdateFailedWithNonfatalNack(id: String) : PresenceNackFault(
+    id,
     nackedPresenceAction = Message.PresenceAction.UPDATE,
     response = ::nonFatalNack,
     nackLimit = 3
 ) {
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = UpdateFailedWithNonfatalNack()
+            override fun simulate(id: String) = UpdateFailedWithNonfatalNack(id)
             override val name = "UpdateFailedWithNonfatalNack"
         }
     }
@@ -661,11 +671,11 @@ class UpdateFailedWithNonfatalNack : PresenceNackFault(
  * failing. Client should handle this by re-entering presence when
  * it sees that re-enter has failed.
  */
-class ReenterOnResumeFailed : ApplicationLayerFault() {
+class ReenterOnResumeFailed(id: String) : ApplicationLayerFault(id) {
 
     companion object {
         val fault = object : Fault() {
-            override fun simulate() = ReenterOnResumeFailed()
+            override fun simulate(id: String) = ReenterOnResumeFailed(id)
             override val name = "ReenterOnResumeFailed"
         }
     }

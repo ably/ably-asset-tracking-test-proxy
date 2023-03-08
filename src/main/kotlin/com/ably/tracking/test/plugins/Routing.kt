@@ -55,11 +55,11 @@ fun Application.configureRouting() {
         post("/faults/{name}/simulation") {
             val name = context.parameters["name"]!!
             val fault = allFaults.first { it.name == name }
-            val faultSimulation = fault.simulate()
-
-            faultSimulation.proxy.start()
 
             val id = UUID.randomUUID().toString()
+            val faultSimulation = fault.simulate(id)
+
+            faultSimulation.proxy.start()
 
             synchronized(faultSimulations) {
                 faultSimulations[id] = faultSimulation
