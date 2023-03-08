@@ -424,6 +424,7 @@ data class ConnectionParams(
     val connectionSerial: String?,
     val resume: String?,
     val key: String?,
+    val accessToken: String?,
     val heartbeats: String?,
     val v: String?,
     val format: String?,
@@ -440,6 +441,7 @@ data class ConnectionParams(
                 connectionSerial = params["connectionSerial"],
                 resume = params["resume"],
                 key = params["key"],
+                accessToken = params["accessToken"],
                 heartbeats = params["heartbeats"],
                 v = params["v"],
                 format = params["format"],
@@ -463,6 +465,9 @@ data class ConnectionParams(
         }
         if (key != null) {
             paramsBuilder["key"] = key
+        }
+        if (accessToken != null) {
+            paramsBuilder["accessToken"] = accessToken
         }
         if (heartbeats != null) {
             paramsBuilder["heartbeats"] = heartbeats
