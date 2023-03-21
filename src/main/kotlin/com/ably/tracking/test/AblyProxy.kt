@@ -1,21 +1,32 @@
 package com.ably.tracking.test
 
 import io.ktor.client.HttpClient
+import io.ktor.client.call.body
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.plugins.websocket.ClientWebSocketSession
 import io.ktor.client.plugins.websocket.cio.wsRaw
+import io.ktor.client.request.headers
+import io.ktor.client.request.request
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.HttpMethod
 import io.ktor.http.Parameters
 import io.ktor.http.ParametersBuilder
+import io.ktor.http.URLProtocol
 import io.ktor.http.Url
+import io.ktor.http.encodedPath
+import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.callloging.CallLogging
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
+import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSocketServerSession
 import io.ktor.server.websocket.WebSockets
@@ -261,6 +272,13 @@ class Layer7Proxy(
             }
             install(WebSockets)
             routing {
+                get("/{...}") {
+                    logger.debug("got GET request ${context.request.path()}")
+
+                    val response = configureClient(this@Layer7Proxy).forwardGetRequestFromCall(context, "realtime.ably.io")
+
+                    call.respond(status = response.status, response.body())
+                }
                 wsProxy(
                     path = "/",
                     target = Url("wss://$targetHost:$targetPort/"),
@@ -269,6 +287,27 @@ class Layer7Proxy(
             }
         }.start(wait = false)
     }
+    private suspend inline fun HttpClient.forwardGetRequestFromCall(context: ApplicationCall, targetHost: String): HttpResponse =
+        request {
+            url {
+                protocol = URLProtocol.HTTPS
+                host = targetHost
+                encodedPath = context.request.path()
+                context.parameters.entries().forEach { entry ->
+                    entry.value.forEach {
+                        parameters.append(entry.key, it)
+                    }
+                }
+            }
+            headers {
+                context.request.headers.entries().forEach { entry ->
+                    entry.value.forEach {
+                        append(entry.key, it)
+                    }
+                }
+            }
+            method = HttpMethod.Get
+        }
 
     override fun stop() {
         logger.debug("stopping...")
@@ -375,6 +414,20 @@ fun Route.wsProxy(path: String, target: Url, parent: Layer7Proxy) {
  * we can see in the Layer 7 proxy logs
  */
 fun configureWsClient(parent: Layer7Proxy) =
+    HttpClient(ClientCIO).config {
+        install(io.ktor.client.plugins.websocket.WebSockets) {
+        }
+        install(Logging) {
+            logger = object : Logger {
+                override fun log(message: String) {
+                    parent.logger.debug("ktor client: $message")
+                }
+            }
+            level = LogLevel.ALL
+        }
+    }
+
+fun configureClient(parent: Layer7Proxy) =
     HttpClient(ClientCIO).config {
         install(io.ktor.client.plugins.websocket.WebSockets) {
         }
