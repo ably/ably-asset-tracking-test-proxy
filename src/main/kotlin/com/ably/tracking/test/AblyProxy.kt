@@ -288,7 +288,7 @@ class Layer7Proxy(
         }.start(wait = false)
     }
     private suspend inline fun HttpClient.forwardGetRequestFromCall(context: ApplicationCall, targetHost: String): HttpResponse =
-        request{
+        request {
             url {
                 protocol = URLProtocol.HTTPS
                 host = targetHost
