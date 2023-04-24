@@ -39,6 +39,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
+import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -111,7 +112,8 @@ class Layer4Proxy(
         logger.debug("accepted connection")
 
         val serverSock = sslSocketFactory.createSocket(targetAddress, targetPort)
-        val conn = Layer4ProxyConnection(id, serverSock, clientSock!!, targetAddress, parentProxy = this)
+        val conn =
+            Layer4ProxyConnection(id, serverSock, clientSock!!, targetAddress, parentProxy = this)
         connections.add(conn)
         return conn
     }
@@ -146,6 +148,7 @@ class Layer4Proxy(
                     val conn = this.accept()
                     logger.debug("proxy starting to run")
                     conn.run()
+                    logger.debug("proxy run completed")
                 } catch (e: Exception) {
                     logger.debug("proxy shutting down: " + e.message)
                     break
@@ -159,7 +162,7 @@ class Layer4Proxy(
  * A TCP Proxy connection between a local client and the remote Ably service.
  */
 internal class Layer4ProxyConnection(
-    private val id: String,
+    id: String,
     private val server: Socket,
     private val client: Socket,
     private val targetHost: String,
@@ -173,8 +176,77 @@ internal class Layer4ProxyConnection(
      * the local client and the Ably Realtime service.
      */
     fun run() {
-        Thread { proxy(server, client, true) }.start()
-        Thread { proxy(client, server) }.start()
+        Thread {
+            proxy(
+                from = server,
+                to = client,
+                logTag = "Server -> Client",
+                rewriteHost = false
+            )
+        }.start()
+
+        Thread {
+            proxy(
+                from = client,
+                to = server,
+                logTag = "Client -> Server",
+                rewriteHost = true
+            )
+        }.start()
+    }
+
+    /**
+     * Copies traffic between source and destination sockets, rewriting the
+     * HTTP host header if requested to remove the proxy host details.
+     */
+    private fun proxy(
+        from: Socket,
+        to: Socket,
+        logTag: String,
+        rewriteHost: Boolean
+    ) {
+        try {
+            val src = from.getInputStream()
+            val dst = to.getOutputStream()
+            val buff = ByteArray(4096)
+            var bytesRead: Int
+
+            while (-1 != src.read(buff).also { bytesRead = it }) {
+                if (parentProxy.isForwarding) {
+                    printBuffer(logTag, buff, bytesRead)
+                    dst.forwardBytes(buff, bytesRead, rewriteHost)
+                }
+            }
+        } catch (ignored: SocketException) {
+        } catch (e: Exception) {
+            logger.debug("exception: $e", e)
+        } finally {
+            logger.debug("closing socket")
+            try {
+                to.close()
+            } catch (ignored: Exception) {
+            }
+        }
+    }
+
+    private fun OutputStream.forwardBytes(buff: ByteArray, bytesRead: Int, rewriteHost: Boolean) {
+        val msg = String(buff, 0, bytesRead)
+        // if message contains � it was encrypted and we cannot rewrite the host
+        if (rewriteHost && !msg.contains("�")) {
+            val hostHeaderRegex = "Host: .*?\r\n".toRegex()
+            val newMsg = msg.replace(
+                hostHeaderRegex,
+                replacement = "Host: $targetHost\r\n"
+            )
+            val newBuff = newMsg.toByteArray()
+            write(newBuff)
+        } else {
+            write(buff, 0, bytesRead)
+        }
+    }
+
+    private fun printBuffer(tag: String, buff: ByteArray, bytesRead: Int) {
+        logger.debug("$tag " + String(buff.copyOfRange(0, bytesRead)))
     }
 
     /**
@@ -193,54 +265,6 @@ internal class Layer4ProxyConnection(
             logger.debug("stop() client: $e", e)
         }
     }
-
-    /**
-     * Copies traffic between source and destination sockets, rewriting the
-     * HTTP host header if requested to remove the proxy host details.
-     */
-    private fun proxy(dstSock: Socket, srcSock: Socket, rewriteHost: Boolean = false) {
-        try {
-            val dst = dstSock.getOutputStream()
-            val src = srcSock.getInputStream()
-            val buff = ByteArray(4096)
-            var bytesRead: Int
-
-            // deal with the initial HTTP upgrade packet
-            bytesRead = src.read(buff)
-            if (bytesRead < 0) {
-                return
-            }
-
-            // HTTP is plaintext so we can just read it
-            val msg = String(buff, 0, bytesRead)
-            logger.debug(String(buff.copyOfRange(0, bytesRead)))
-            if (rewriteHost) {
-                val hostHeaderRegex = "Host: .*?\r\n".toRegex()
-                val newMsg = msg.replace(
-                    hostHeaderRegex,
-                    replacement = "Host: $targetHost\r\n"
-                )
-                val newBuff = newMsg.toByteArray()
-                dst.write(newBuff, 0, newBuff.size)
-            } else {
-                dst.write(buff, 0, bytesRead)
-            }
-
-            while (-1 != src.read(buff).also { bytesRead = it }) {
-                if (parentProxy.isForwarding) {
-                    dst.write(buff, 0, bytesRead)
-                }
-            }
-        } catch (ignored: SocketException) {
-        } catch (e: Exception) {
-            logger.debug("$e", e)
-        } finally {
-            try {
-                srcSock.close()
-            } catch (ignored: Exception) {
-            }
-        }
-    }
 }
 
 /**
@@ -248,7 +272,7 @@ internal class Layer4ProxyConnection(
  * the Ably protocol level.
  */
 class Layer7Proxy(
-    private val id: String,
+    id: String,
     override val listenHost: String = PROXY_HOST,
     override val listenPort: Int = PROXY_PORT,
     private val targetHost: String = REALTIME_HOST,
@@ -275,7 +299,10 @@ class Layer7Proxy(
                 get("/{...}") {
                     logger.debug("got GET request ${context.request.path()}")
 
-                    val response = configureClient(this@Layer7Proxy).forwardGetRequestFromCall(context, "realtime.ably.io")
+                    val response = configureClient(this@Layer7Proxy).forwardGetRequestFromCall(
+                        context,
+                        "realtime.ably.io"
+                    )
 
                     call.respond(status = response.status, response.body())
                 }
@@ -287,7 +314,11 @@ class Layer7Proxy(
             }
         }.start(wait = false)
     }
-    private suspend inline fun HttpClient.forwardGetRequestFromCall(context: ApplicationCall, targetHost: String): HttpResponse =
+
+    private suspend inline fun HttpClient.forwardGetRequestFromCall(
+        context: ApplicationCall,
+        targetHost: String
+    ): HttpResponse =
         request {
             url {
                 protocol = URLProtocol.HTTPS
@@ -336,6 +367,7 @@ class Layer7Proxy(
                                 clientSession.close()
                             }
                         }
+
                         FrameDirection.ServerToClient -> {
                             serverSession.send(action.frame)
                             if (action.sendAndClose) {
@@ -346,7 +378,7 @@ class Layer7Proxy(
                 }
             } catch (e: Exception) {
                 logger.debug("forwardFrames error: $e", e)
-                throw(e)
+                throw (e)
             }
         }
     }
